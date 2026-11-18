@@ -15,7 +15,7 @@ export default {
     const siteName = env.SITE_NAME || DEFAULT_SITE_NAME;
     const musicApiBase = (env.MUSIC_API_BASE || DEFAULT_MUSIC_API_BASE).replace(/\/$/, '');
     if (url.pathname.startsWith('/proxy/')) {
-      return handleProxy(request, url, musicApiBase);
+      return handleProxy(request, url, musicApiBase, env);
     }
     const origin = url.origin;
     const proxyBase = origin + '/proxy/';
@@ -107,11 +107,12 @@ async function handleSync(request, env) {
   }
   return jsonResponse({ error: 'method not allowed' }, 405);
 }
-async function handleProxy(request, url, musicApiBase) {
+async function handleProxy(request, url, musicApiBase, env) {
   const rawTarget = url.pathname.slice('/proxy/'.length) + url.search;
   let targetUrl;
   try {
-    targetUrl = new URL(decodeURIComponent(rawTarget));
+    const normalized = /^https?%3A%2F%2F/i.test(rawTarget) ? decodeURIComponent(rawTarget) : rawTarget;
+    targetUrl = new URL(normalized);
   } catch {
     return new Response('Invalid proxy target URL', { status: 400 });
   }
@@ -129,6 +130,10 @@ async function handleProxy(request, url, musicApiBase) {
     'ws.stream.qqmusic.qq.com',
     'dl.stream.qqmusic.qq.com',
     'aqqmusic.tc.qq.com',
+    'kuwo.cn',
+    'sycdn.kuwo.cn',
+    'music.126.net',
+    'migu.cn',
   ];
   if (!allowedHosts.some(h => targetUrl.hostname === h || targetUrl.hostname.endsWith('.' + h))) {
     return new Response('Proxy target not allowed: ' + targetUrl.hostname, { status: 403 });
@@ -139,6 +144,10 @@ async function handleProxy(request, url, musicApiBase) {
   proxyHeaders.set('Origin', 'https://y.qq.com');
   const ct = request.headers.get('Content-Type');
   if (ct) proxyHeaders.set('Content-Type', ct);
+  // 仅在转发给自建音乐 API 时，由服务端附带 Token（不会暴露给浏览器，也不会发给其他域名）
+  if (env && env.API_TOKEN && targetUrl.hostname === musicApiHost) {
+    proxyHeaders.set('X-API-Token', env.API_TOKEN);
+  }
   const init = {
     method: request.method,
     headers: proxyHeaders,
@@ -1257,7 +1266,9 @@ createApp({
             pushMediaSession([]);
             try {
                 const levelMap = { low: 'standard', standard: 'exhigh', high: 'lossless' };
-                const url = \`\${MUSIC_API_BASE}/music/qq_song_kw.php?id=\${song.songmid}&level=\${levelMap[currentQuality.value]}&type=json\`;
+                const nameParam = song.title ? \`&name=\${encodeURIComponent(song.title)}\` : '';
+                const artistParam = song.artist ? \`&artist=\${encodeURIComponent(song.artist)}\` : '';
+                const url = \`\${MUSIC_API_BASE}/music/qq_song_kw.php?id=\${song.songmid}&level=\${levelMap[currentQuality.value]}&type=json\${nameParam}\${artistParam}\`;
                 const res = await axios.get(PROXY + url);
                 if (res.data?.data?.url) {
                     currentPlayUrl.value = res.data.data.url;
